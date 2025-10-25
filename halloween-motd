@@ -1,0 +1,226 @@
+#!/usr/bin/env sh
+# Copyright (c) 2025 Reliable Penguin, Inc.
+#
+# Licensed under the Creative Commons Attribution-NonCommercial 4.0 International License.
+# You may not use this file for commercial purposes without explicit permission.
+# Full license text: https://creativecommons.org/licenses/by-nc/4.0/
+
+# halloween-motd — portable (POSIX sh), color off by default
+
+set -e
+
+MODE="--file"
+WIDTH=""
+USE_COLOR=0
+ART="random"
+
+# ---- help ----
+show_help() {
+  cat <<'USAGE'
+Usage: halloween-motd [OPTIONS]
+
+Options:
+  --stdout             Print MOTD to stdout (default action when specified)
+  --file               Write MOTD to /etc/motd (requires root)
+  --width N | --width=N | -w N | -w=N
+                       Set output width (default: detect terminal width)
+  --color              Enable 16-color ANSI output
+  --no-color           Disable color (default)
+  --art=NAME           Choose art: pumpkin | ghost | bat | cat | spider | random
+  -h, --help           Show this help and exit
+
+Examples:
+  halloween-motd --stdout --width=80
+  halloween-motd --file --color --art=ghost
+USAGE
+}
+
+# ---- arg parsing (portable) ----
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --stdout)   MODE="--stdout" ;;
+    --file)     MODE="--file"   ;;
+    --color)    USE_COLOR=1     ;;
+    --no-color) USE_COLOR=0     ;;
+    --art)      ART="$2"; shift ;;
+    --art=*)    ART="${1#*=}"   ;;
+    --width)    WIDTH="$2"; shift ;;
+    --width=*)  WIDTH="${1#*=}" ;;
+    -w)         WIDTH="$2"; shift ;;
+    -w=*)       WIDTH="${1#*=}" ;;
+    -h|--help)  show_help; exit 0 ;;
+    *)          : ;;
+  esac
+  shift || true
+done
+
+# sanitize WIDTH if provided (numeric only)
+case "$WIDTH" in
+  "") : ;;
+  *[!0-9]* ) WIDTH="" ;;
+  * ) : ;;
+esac
+
+# Detect terminal width if not provided (fallback 80)
+if [ -z "$WIDTH" ]; then
+  if command -v tput >/dev/null 2>&1; then
+    WIDTH="$(tput cols 2>/dev/null || echo 80)"
+  else
+    WIDTH="80"
+  fi
+fi
+
+# clamp width to sane bounds
+[ "$WIDTH" -lt 20 ] && WIDTH=20
+[ "$WIDTH" -gt 200 ] && WIDTH=200
+
+# ---- helpers ----
+CSI() { [ "$USE_COLOR" -eq 1 ] && printf '\033[%sm' "$1" || :; }
+RESET(){ [ "$USE_COLOR" -eq 1 ] && printf '\033[0m'     || :; }
+
+str_len() { printf %s "$1" | wc -c | tr -d ' '; } # byte length for ASCII
+
+center_line() {
+  line="$1"; w="$2"
+  len="$(str_len "$line")"
+  if [ "$len" -ge "$w" ]; then printf %s "$line"; return; fi
+  space=$((w - len)); padL=$((space / 2)); padR=$((space - padL))
+  printf "%*s%s%*s" "$padL" "" "$line" "$padR" ""
+}
+
+hline() { char="$1"; w="$2"; printf "%s" "$(printf "%*s" "$w" "" | tr ' ' "$char")"; }
+
+hostname_str() { hn="$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo localhost)"; printf %s "$hn"; }
+today_str()    { date '+%A, %B %d, %Y' 2>/dev/null || date; }
+
+# ---- ASCII ART (safe, single-quoted heredocs) ----
+art_pumpkin() {
+  cat <<'ART'
+          ___
+        ."   ".
+       /  .-.  \
+      |  /   \  |
+      | |  _  | |
+      | | ( ) | |
+      |  \___/  |
+       \       /
+        `.___.'
+ART
+}
+art_ghost() {
+  cat <<'ART'
+      .-"""-.
+     / .===. \
+     \/  6 6 \/
+     (   _\  )
+      |\___/|
+  ___/`-----'\___
+ /  __       __  \
+ \_/  \_____/  \_/
+ART
+}
+# Symmetric, zero-leading-indent bat so block-centering is exact
+art_bat() {
+  cat <<'ART'
+ /\         /\
+/  \.-"""-./  \
+\   (  _  )   /
+   '==\  /=='
+    /  .  \
+    /_/ \_\
+ART
+}
+art_cat() {
+  cat <<'ART'
+  /\_/\
+ ( o.o )
+  > ^ <
+ART
+}
+art_spider() {
+  cat <<'ART'
+      _     _
+     ( \---/ )
+      ) . . (
+ ___,--\_Y_/--,___
+(___ .-/'-`\-. ___)
+    / /     \ \
+ART
+}
+
+choose_art() {
+  case "$ART" in
+    pumpkin|ghost|bat|cat|spider) echo "$ART"; return ;;
+    *) : ;;
+  esac
+  # 0..4 random (works even if /dev/urandom missing)
+  if command -v od >/dev/null 2>&1; then
+    idx="$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' ')"
+  fi
+  [ -z "$idx" ] && idx=$(( ( $(date +%s) + $$ ) % 5 ))
+  idx=$((idx % 5))
+  case "$idx" in 0) echo pumpkin ;; 1) echo ghost ;; 2) echo bat ;; 3) echo cat ;; 4) echo spider ;; esac
+}
+
+print_art_centered() {
+  name="$1"; w="$2"; color="$3"
+  tmp="$(mktemp 2>/dev/null || echo /tmp/halloween_motd.$$)"
+  trap 'rm -f "$tmp"' EXIT INT TERM
+  case "$name" in
+    pumpkin) art_pumpkin >"$tmp" ;;
+    ghost)   art_ghost   >"$tmp" ;;
+    bat)     art_bat     >"$tmp" ;;
+    cat)     art_cat     >"$tmp" ;;
+    spider)  art_spider  >"$tmp" ;;
+  esac
+  max=0
+  while IFS= read -r L; do
+    LLEN="$(str_len "$L")"; [ "$LLEN" -gt "$max" ] && max="$LLEN"
+  done <"$tmp"
+  [ "$max" -gt "$w" ] && max="$w"
+  padL=$(((w - max)/2)); [ "$padL" -lt 0 ] && padL=0
+  while IFS= read -r L; do
+    [ -n "$color" ] && CSI "$color"
+    printf "%*s%s\n" "$padL" "" "$L"
+    RESET
+  done <"$tmp"
+  rm -f "$tmp"
+  trap - EXIT INT TERM
+}
+
+render() {
+  title='*** Happy Halloween ***'
+  host="$(hostname_str)"
+  today="$(today_str)"
+
+  if [ "$USE_COLOR" -eq 1 ]; then color=33; accent=36; else color=""; accent=""; fi
+
+  [ -n "$accent" ] && CSI "$accent"; hline "~" "$WIDTH"; RESET; printf "\n"
+  [ -n "$color" ]  && CSI "$color";  center_line "$title" "$WIDTH";  RESET; printf "\n"
+  [ -n "$color" ]  && CSI "$color";  center_line "$host"  "$WIDTH";  RESET; printf "\n"
+  [ -n "$color" ]  && CSI "$color";  center_line "$today" "$WIDTH";  RESET; printf "\n\n"
+
+  name="$(choose_art)"
+  print_art_centered "$name" "$WIDTH" "$accent"
+
+  [ -n "$accent" ] && CSI "$accent"; hline "~" "$WIDTH"; RESET; printf "\n"
+}
+
+main() {
+  case "$MODE" in
+    --stdout) render ;;
+    --file|*)
+      if [ "$(id -u)" -ne 0 ]; then
+        echo "[halloween-motd] run as root or use --stdout" >&2; exit 1
+      fi
+      tmp="$(mktemp 2>/dev/null || echo /tmp/halloween_motd.$$)"
+      render >"$tmp"
+      mv "$tmp" /etc/motd
+      chmod 644 /etc/motd
+      echo "[halloween-motd] wrote /etc/motd"
+      ;;
+  esac
+}
+
+main "$@"
+
