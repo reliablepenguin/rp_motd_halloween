@@ -1,4 +1,5 @@
 # 🎃 Reliable Penguin — Halloween MOTD
+<img src="halloween-motd.png" align="right" width="200" alt="Diagram">
 
 Make your servers *spooktacular* this season! This lightweight, portable script prints a Halloween‑themed Message of the Day (MOTD) with centered headers and classic ASCII art (bat, ghost, pumpkin, cat, spider). Color is off by default for maximum compatibility, and can be enabled with `--color`.
 
